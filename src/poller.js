@@ -21,7 +21,6 @@ class Poller {
     try {
       const html = await this._fetchHtml();
       const stocks = this._parseTable(html);
-      const elapsed = Date.now() - t0;
       this.cycles++;
       let loaded = 0;
       const now = Date.now();
@@ -32,7 +31,8 @@ class Poller {
           loaded++;
         }
       }
-      logger.info("Cycle " + this.cycles + " done in " + (Date.now()-t0) + "ms - " + loaded + "/" + stocks.length + " symbols");
+      const elapsed = Date.now() - t0;
+      logger.info("Cycle " + this.cycles + " done in " + elapsed + "ms - " + loaded + "/" + stocks.length + " symbols | Store: " + this.store.getSummary().totalEntries + " entries");
     } catch (err) { logger.error("Poll failed: " + err.message); }
     if (this.running) this.timer = setTimeout(() => this._poll(), POLL_INTERVAL_MS);
   }
@@ -41,11 +41,11 @@ class Poller {
     const headerMatches = [...html.matchAll(/<th[^>]*data-name="([^"]+)"[^>]*>/gi)];
     if (headerMatches.length === 0) { logger.warn("No headers found"); return stocks; }
     const cols = headerMatches.map(m => m[1].toLowerCase().trim());
-    logger.info("Columns: " + cols.join(", "));
+    if (this.cycles === 0) logger.info("Columns: " + cols.join(", "));
     const si = cols.indexOf("symbol");
-    const ci = cols.indexOf("current");
+    const ci = cols.indexOf("close");
     const li = cols.indexOf("ldcp");
-    const vi = cols.indexOf("value");
+    const vi = cols.indexOf("volume");
     const tbodyMatch = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i);
     if (!tbodyMatch) { logger.warn("No tbody found"); return stocks; }
     const rows = [...tbodyMatch[1].matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)];
@@ -56,9 +56,11 @@ class Poller {
       if (!sym) continue;
       const pn = (i) => { if (i<0||i>=cells.length) return 0; const v=parseFloat(cells[i].replace(/,/g,"")); return isNaN(v)?0:v; };
       const price = pn(ci) || pn(li);
-      stocks.push({ symbol: sym, price, value: pn(vi) });
+      const volume = pn(vi);
+      const value = price * volume;
+      stocks.push({ symbol: sym, price, value });
     }
-    if (stocks.length > 0) logger.info("Sample: " + JSON.stringify(stocks[0]));
+    if (stocks.length > 0 && this.cycles === 0) logger.info("Sample: " + JSON.stringify(stocks[0]));
     return stocks;
   }
   _fetchHtml() {
