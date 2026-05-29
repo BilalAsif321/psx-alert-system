@@ -1,14 +1,6 @@
-/**
- * Poller — fetches ALL stocks in one request every 30 seconds
- * Source: https://dps.psx.com.pk/market-watch
- * Fallback: https://psxterminal.com/api/ticks/REG/{symbol} individually
- */
-
-const https = require('https');
-const logger = require('./logger');
-
-const POLL_INTERVAL_MS = 30000; // 30 seconds
-
+const https = require("https");
+const logger = require("./logger");
+const POLL_INTERVAL_MS = 30000;
 class Poller {
   constructor(store, alertEngine) {
     this.store = store;
@@ -17,105 +9,69 @@ class Poller {
     this.cycles = 0;
     this.timer = null;
   }
-
   async start() {
-    logger.info('Poller starting — using dps.psx.com.pk/market-watch (bulk endpoint)');
+    logger.info("Poller starting - HTML parser mode");
     this.running = true;
     await this._poll();
   }
-
-  stop() {
-    this.running = false;
-    if (this.timer) clearTimeout(this.timer);
-  }
-
+  stop() { this.running = false; if (this.timer) clearTimeout(this.timer); }
   async _poll() {
     if (!this.running) return;
-
     const t0 = Date.now();
     try {
-      const stocks = await this._fetchMarketWatch();
+      const html = await this._fetchHtml();
+      const stocks = this._parseTable(html);
       const elapsed = Date.now() - t0;
       this.cycles++;
-
       let loaded = 0;
       const now = Date.now();
-
       for (const s of stocks) {
-        const symbol = s.symbol || s.SYMBOL || s.code || s.s;
-        const price = s.current || s.ldcp || s.price || s.close || s.c || s.last;
-        const value = s.volume_value || s.value || s.val || s.turnover || 0;
-
-        if (symbol && price && price > 0) {
-          this.store.addTick(symbol, price, value, now);
-          this.alertEngine.evaluate(symbol, price, value, now);
+        if (s.symbol && s.price > 0) {
+          this.store.addTick(s.symbol, s.price, s.value, now);
+          this.alertEngine.evaluate(s.symbol, s.price, s.value, now);
           loaded++;
         }
       }
-
-      logger.info(
-        `Cycle ${this.cycles} complete in ${elapsed}ms — ` +
-        `${loaded} symbols loaded | ` +
-        `Store: ${this.store.getSummary().totalEntries} entries`
-      );
-
-    } catch (err) {
-      logger.error('Poll failed: ' + err.message);
-      logger.info('Will retry in 30 seconds...');
-    }
-
-    // Schedule next poll
-    if (this.running) {
-      this.timer = setTimeout(() => this._poll(), POLL_INTERVAL_MS);
-    }
+      logger.info("Cycle " + this.cycles + " done in " + (Date.now()-t0) + "ms - " + loaded + "/" + stocks.length + " symbols");
+    } catch (err) { logger.error("Poll failed: " + err.message); }
+    if (this.running) this.timer = setTimeout(() => this._poll(), POLL_INTERVAL_MS);
   }
-
-  _fetchMarketWatch() {
+  _parseTable(html) {
+    const stocks = [];
+    const headerMatches = [...html.matchAll(/<th[^>]*data-name="([^"]+)"[^>]*>/gi)];
+    if (headerMatches.length === 0) { logger.warn("No headers found"); return stocks; }
+    const cols = headerMatches.map(m => m[1].toLowerCase().trim());
+    logger.info("Columns: " + cols.join(", "));
+    const si = cols.indexOf("symbol");
+    const ci = cols.indexOf("current");
+    const li = cols.indexOf("ldcp");
+    const vi = cols.indexOf("value");
+    const tbodyMatch = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i);
+    if (!tbodyMatch) { logger.warn("No tbody found"); return stocks; }
+    const rows = [...tbodyMatch[1].matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)];
+    for (const row of rows) {
+      const cells = [...row[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map(m => m[1].replace(/<[^>]+>/g,"").replace(/&nbsp;/g,"").trim());
+      if (cells.length < 3) continue;
+      const sym = si >= 0 ? cells[si] : null;
+      if (!sym) continue;
+      const pn = (i) => { if (i<0||i>=cells.length) return 0; const v=parseFloat(cells[i].replace(/,/g,"")); return isNaN(v)?0:v; };
+      const price = pn(ci) || pn(li);
+      stocks.push({ symbol: sym, price, value: pn(vi) });
+    }
+    if (stocks.length > 0) logger.info("Sample: " + JSON.stringify(stocks[0]));
+    return stocks;
+  }
+  _fetchHtml() {
     return new Promise((resolve, reject) => {
-      const options = {
-        hostname: 'dps.psx.com.pk',
-        path: '/market-watch',
-        method: 'GET',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'application/json, text/plain, */*',
-          'Referer': 'https://dps.psx.com.pk/',
-          'Origin': 'https://dps.psx.com.pk',
-        },
-        timeout: 15000,
-      };
-
-      const req = https.request(options, (res) => {
-        let body = '';
-        res.on('data', chunk => body += chunk);
-        res.on('end', () => {
-          logger.info(`market-watch response: HTTP ${res.statusCode}, ${body.length} bytes`);
-          try {
-            const data = JSON.parse(body);
-            // Handle various response shapes
-            if (Array.isArray(data)) return resolve(data);
-            if (data && Array.isArray(data.data)) return resolve(data.data);
-            if (data && Array.isArray(data.stocks)) return resolve(data.stocks);
-            if (data && Array.isArray(data.result)) return resolve(data.result);
-            // Log first 300 chars to understand structure
-            logger.warn('Unexpected response shape: ' + body.substring(0, 300));
-            resolve([]);
-          } catch (e) {
-            logger.warn('Non-JSON response: ' + body.substring(0, 300));
-            reject(new Error('JSON parse error: ' + e.message));
-          }
-        });
+      const req = https.request({ hostname: "dps.psx.com.pk", path: "/market-watch", method: "GET", headers: { "User-Agent": "Mozilla/5.0", "Accept": "text/html,*/*", "Referer": "https://dps.psx.com.pk/" }, timeout: 15000 }, (res) => {
+        let body = "";
+        res.on("data", chunk => body += chunk);
+        res.on("end", () => { logger.info("HTTP " + res.statusCode + " " + body.length + " bytes"); resolve(body); });
       });
-
-      req.on('error', reject);
-      req.on('timeout', () => {
-        req.destroy();
-        reject(new Error('Request timed out'));
-      });
-
+      req.on("error", reject);
+      req.on("timeout", () => { req.destroy(); reject(new Error("Timeout")); });
       req.end();
     });
   }
 }
-
 module.exports = Poller;
