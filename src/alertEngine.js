@@ -1,4 +1,5 @@
 const logger = require("./logger");
+const { logAlertToSheets } = require("./sheetsLogger");
 const PRICE_CHANGE_THRESHOLD = 5.0;
 const MIN_DAY_VALUE = 10_000_000;
 const ALERT_COOLDOWN_MS = 30 * 60 * 1000;
@@ -34,8 +35,25 @@ class AlertEngine {
     logger.info("ALERT: " + symbol + " " + direction + " " + changePercent.toFixed(2) + "% (" + priceOld + " to " + currentPrice + ") | Value: PKR " + (dayValue / 1e6).toFixed(1) + "M");
     this.lastAlerted.set(symbol, timestamp);
     this._logAlert(symbol, direction, priceOld, currentPrice, changePercent, dayValue, windowMinutes);
+
     this.emailService.sendAlert({ symbol, direction, priceOld, priceNew: currentPrice, changePercent, dayValue, windowMinutes, timestamp })
       .catch((err) => logger.error("Email send failed for " + symbol + ": " + err.message));
+
+    const now = new Date(timestamp);
+    const pkt = new Date(now.getTime() + 5 * 60 * 60 * 1000); // UTC+5
+    const date = pkt.toISOString().slice(0, 10);               // YYYY-MM-DD
+    const time = pkt.toISOString().slice(11, 19);              // HH:MM:SS
+
+    logAlertToSheets({
+      symbol,
+      date,
+      time,
+      percentChange: parseFloat(changePercent.toFixed(2)),
+      currentPrice,
+      price30minAgo: priceOld,
+      dayTradedValue: parseFloat((dayValue / 1e6).toFixed(2)),
+      percentAvgVolume: ""
+    });
   }
 
   _logAlert(symbol, direction, priceOld, priceNew, changePercent, dayValue, windowMinutes) {
