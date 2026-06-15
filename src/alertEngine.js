@@ -1,5 +1,6 @@
 const logger = require("./logger");
 const { logAlertToSheets } = require("./sheetsLogger");
+const { getFundamentals } = require("./fundamentalsService");
 const PRICE_CHANGE_THRESHOLD = 5.0;
 const MIN_DAY_VALUE = 10_000_000;
 const ALERT_COOLDOWN_MS = 30 * 60 * 1000;
@@ -44,16 +45,31 @@ class AlertEngine {
     const date = pkt.toISOString().slice(0, 10);               // YYYY-MM-DD
     const time = pkt.toISOString().slice(11, 19);              // HH:MM:SS
 
-    logAlertToSheets({
-      symbol,
-      date,
-      time,
-      percentChange: parseFloat(changePercent.toFixed(2)),
-      currentPrice,
-      price30minAgo: priceOld,
-      dayTradedValue: parseFloat((dayValue / 1e6).toFixed(2)),
-      percentAvgVolume: ""
-    });
+    getFundamentals(symbol).then((f) => {
+      let percentAvgVolume = "";
+      if (f && f.volume30Avg > 0) {
+        // estimate today's volume from dayValue / currentPrice
+        const todayVolume = dayValue / currentPrice;
+        percentAvgVolume = parseFloat(((todayVolume / f.volume30Avg) * 100).toFixed(1));
+      }
+
+      logAlertToSheets({
+        symbol,
+        date,
+        time,
+        percentChange: parseFloat(changePercent.toFixed(2)),
+        currentPrice,
+        price30minAgo: priceOld,
+        dayTradedValue: parseFloat((dayValue / 1e6).toFixed(2)),
+        percentAvgVolume,
+        peRatio: f ? f.peRatio : "",
+        dividendYield: f ? f.dividendYield : "",
+        marketCap: f ? f.marketCap : "",
+        sector: f ? f.sector : "",
+        yearChange: f ? f.yearChange : "",
+        listedIndices: f ? f.listedIndices : ""
+      });
+    }).catch((err) => logger.error("Sheets logging with fundamentals failed for " + symbol + ": " + err.message));
   }
 
   _logAlert(symbol, direction, priceOld, priceNew, changePercent, dayValue, windowMinutes) {
