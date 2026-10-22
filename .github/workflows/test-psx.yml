@@ -1,0 +1,15 @@
+name: Test PSX access
+on: workflow_dispatch
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Try PSX market watch
+        run: |
+          echo "DNS answer:"
+          getent hosts dps.psx.com.pk
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o page.html -w "%{http_code}" -A "Mozilla/5.0" https://dps.psx.com.pk/market-watch)
+            echo "Try $i: status $code, size $(wc -c < page.html) bytes, lines with HUBC: $(grep -c HUBC page.html)"
+            sleep 3
+          done
