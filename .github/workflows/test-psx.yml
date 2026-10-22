@@ -4,12 +4,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Try PSX market watch
+      - name: Try each PSX node
         run: |
-          echo "DNS answer:"
-          getent hosts dps.psx.com.pk
-          for i in 1 2 3 4 5; do
-            code=$(curl -s -o page.html -w "%{http_code}" -A "Mozilla/5.0" https://dps.psx.com.pk/market-watch)
-            echo "Try $i: status $code, size $(wc -c < page.html) bytes, lines with HUBC: $(grep -c HUBC page.html)"
-            sleep 3
+          for ip in 52.128.23.6 52.128.23.16; do
+            for i in 1 2 3; do
+              code=$(curl -s -o page.html -w "%{http_code}" -A "Mozilla/5.0" --resolve dps.psx.com.pk:443:$ip https://dps.psx.com.pk/market-watch)
+              echo "Node $ip try $i: status $code, size $(wc -c < page.html) bytes, lines with HUBC: $(grep -c HUBC page.html)"
+              sleep 3
+            done
           done
